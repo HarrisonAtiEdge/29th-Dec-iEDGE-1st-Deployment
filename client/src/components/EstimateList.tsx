@@ -610,7 +610,24 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
     return <span className={`${base} ${cls}`}>{s}</span>;
   };
 
+const formatDateWithMonthName = (dateStr?: string) => {
+  if (!dateStr) return "";
 
+  // expected format: YYYY-MM-DD
+  const [year, month, day] = dateStr.split("-");
+
+  const date = new Date(
+    Number(year),
+    Number(month) - 1, // 👈 month index
+    Number(day)
+  );
+
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
 
   return (
     <div className="mt-8 px-4">
@@ -647,7 +664,8 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
 
               <td>{e.client}</td>
               <td>{e.subject}</td>
-              <td>{e.date}</td>
+              {/* <td>{e.date}</td> */}
+               <td>{formatDateWithMonthName(e.date)}</td>
               <td>
                 PKR{" "}
                 {Number(e.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
