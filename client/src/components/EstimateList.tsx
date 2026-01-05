@@ -469,6 +469,14 @@ import {
 
 import { onAuthStateChanged } from "firebase/auth";
 import { deleteDoc, doc as docRef } from "firebase/firestore";
+import { buildEstimatePdfBlob } from "@/lib/estimatePdf"; // ✅ NEW
+import {
+  Eye,
+  Pencil,
+  Copy,
+  Trash2,
+} from "lucide-react";
+
 
 type Props = {
   onEdit: (estimate: Estimate) => void;
@@ -486,7 +494,6 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
 
   const estimatesRef = collection(db, "Panels", "IEDGE-SYSTEM", "estimates");
 
-  // ✅ Same company list as EstimateForm
   const companyList = [
     { name: "iEDGE", logo: "/Iedge-TM-Logos-01.png" },
     { name: "iEDGE - Digital & Creative", logo: "/Iedge-Digital-and-Creative-TM-Logos-12.png" },
@@ -512,24 +519,17 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
 
       const uid = user.uid;
 
-      // user data (panel-based)
       const userSnap = await getDoc(doc(db, "Panels", "IEDGE-SYSTEM", "users", uid));
       const userData = userSnap.data();
       const adminCheck = userData?.isAdmin === true;
       setIsAdmin(adminCheck);
 
-      // all users (createdBy name)
       const usersSnapshot = await getDocs(collection(db, "Panels", "IEDGE-SYSTEM", "users"));
       const map: Record<string, any> = {};
-      usersSnapshot.forEach((u) => {
-        map[u.id] = u.data();
-      });
+      usersSnapshot.forEach((u) => (map[u.id] = u.data()));
       setUsersMap(map);
 
-      // panel based query
-      const q = adminCheck
-        ? query(estimatesRef)
-        : query(estimatesRef, where("createdBy", "==", uid));
+      const q = adminCheck ? query(estimatesRef) : query(estimatesRef, where("createdBy", "==", uid));
 
       unsubSnapshot = onSnapshot(q, (snap) => {
         const list = snap.docs.map((d) => ({
@@ -566,184 +566,51 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
       (e.client ?? "").toLowerCase().includes(s) ||
       (e.subject ?? "").toLowerCase().includes(s) ||
       (e.date ?? "").toLowerCase().includes(s) ||
-      e.total?.toString().toLowerCase().includes(s)
+      e.total?.toString().toLowerCase().includes(s) ||
+      (e as any).status?.toLowerCase().includes(s)
+
     );
   });
 
   const handleViewDetail = async (estimate: Estimate) => {
     setSelectedEstimate(estimate);
-    const blob = await generatePDFForPreview(estimate);
+
+    const blob = await buildEstimatePdfBlob({
+      estimate,
+      companyList,
+      usersMap, // ✅ createdBy footer
+      // withLogo comes from saved estimate.withLogo (or defaults true in builder)
+      companyName: estimate.company || "",
+    });
+
     const url = URL.createObjectURL(blob);
     setPreviewURL(url);
     setIsDrawerOpen(true);
   };
+  const StatusBadge = ({ status }: { status?: string }) => {
+    const s = status || "RFQ Sent";
 
-  // ✅ generate PDF with logo (same as EstimateForm behaviour)
-  const generatePDFForPreview = async (data: Estimate) => {
-    const { jsPDF } = await import("jspdf");
-    const autoTable = (await import("jspdf-autotable")).default;
+    const base = "inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold";
 
-    const doc = new jsPDF("p", "pt", "a4");
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const margin = 40;
+    const cls =
+      s === "Approved"
+        ? "bg-green-100 text-green-800"
+        : s === "Rejected"
+          ? "bg-red-100 text-red-800"
+          : s === "Project Cancelled"
+            ? "bg-gray-200 text-gray-800"
+            : s === "Invoiced"
+              ? "bg-blue-100 text-blue-800"
+              : s === "Payment Received"
+                ? "bg-emerald-100 text-emerald-800"
+                : s === "PO Received"
+                  ? "bg-purple-100 text-purple-800"
+                  : "bg-yellow-100 text-yellow-800"; // RFQ Sent default
 
-    const wrapTextByWords = (text: string, wordsPerLine = 5) => {
-      if (!text) return [];
-      const words = text.split(" ");
-      const lines: string[] = [];
-      for (let i = 0; i < words.length; i += wordsPerLine) {
-        lines.push(words.slice(i, i + wordsPerLine).join(" "));
-      }
-      return lines;
-    };
-
-    const generatePDFContent = () => {
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(16);
-      doc.text("Estimate", margin, 80);
-
-      let y = 100;
-      doc.setFontSize(9);
-      doc.text("ADDRESS", margin, y);
-      y += 12;
-
-      doc.setFont("helvetica", "bold");
-      doc.text(data.client || "", margin, y);
-      y += 12;
-      doc.text(data.info || "", margin, y);
-      doc.setFont("helvetica", "normal");
-      y += 12;
-
-      const wrappedAddress = wrapTextByWords(data.address || "", 5);
-      wrappedAddress.forEach((line) => {
-        doc.text(line, margin, y);
-        y += 12;
-      });
-
-      doc.setFont("helvetica", "bold");
-      doc.text(`ESTIMATE: ${data.estimateNo}`, pageWidth - 180, 100);
-      doc.setFont("helvetica", "normal");
-      doc.text(`Issue Date: ${data.date || ""}`, pageWidth - 180, 130);
-      doc.text(`Expire On: ${data.expiryDate || ""}`, pageWidth - 180, 145);
-
-      doc.setFont("helvetica", "bold");
-      doc.text("PROJECT OWNER", margin, 165);
-      doc.setFont("helvetica", "normal");
-      doc.text(data.projectOwner || "", margin, 175);
-
-      if (data.paymentTerm) {
-        let paymentY = 175 + 24;
-        doc.setFont("helvetica", "bold");
-        doc.text("Payment Terms:", margin, paymentY);
-        paymentY += 12;
-        doc.setFont("helvetica", "normal");
-
-        const wrappedTerms = wrapTextByWords(data.paymentTerm, 8);
-        wrappedTerms.forEach((line) => {
-          doc.text(line, margin, paymentY);
-          paymentY += 12;
-        });
-      }
-
-      // ✅ Use same Tax column style as your working code
-      const serviceRows = (data.services || []).map((s: any) => [
-        `${s.detail}\n${s.description || ""}`,
-        s.units === 0 ? "" : s.units,
-        s.rate === 0 ? "" : Number(s.rate).toLocaleString(),
-        (Number(s.taxPercent ?? 0) > 0 && data.taxType !== "none")
-          ? `${s.taxLabel ?? "Tax"} ${Number(s.taxPercent ?? 0)}% (${data.taxType})`
-          : "No Tax",
-        s.units * s.rate === 0 ? "" : (s.units * s.rate).toLocaleString(),
-      ]);
-
-      autoTable(doc, {
-        startY: 235,
-        head: [["SERVICE DETAILS", "UNITS", "RATE", "TAX", "AMOUNT"]],
-        body: serviceRows,
-        styles: { fontSize: 9, cellPadding: 4, valign: "top" },
-        headStyles: { fillColor: [230, 230, 230], textColor: [0, 0, 0] },
-      });
-
-      const finalY = (doc as any).lastAutoTable?.finalY + 65 || 300;
-
-      doc.setFont("helvetica", "bold");
-      doc.text("SUBTOTAL", pageWidth - 200, finalY);
-      doc.text("TAX", pageWidth - 200, finalY + 15);
-      doc.text("TOTAL", pageWidth - 200, finalY + 30);
-
-      doc.setFont("helvetica", "normal");
-      doc.text((data.subtotal ?? 0).toLocaleString(), pageWidth - 100, finalY);
-      doc.text((data.tax ?? 0).toLocaleString(), pageWidth - 100, finalY + 15);
-
-      doc.setFont("helvetica", "bold");
-      doc.text(
-        `PKR ${Number(data.total ?? 0).toLocaleString()}`,
-        pageWidth - 150,
-        finalY + 30
-      );
-
-      if (data.message) {
-        let noteY = (doc as any).lastAutoTable.finalY + 120;
-        doc.setFont("helvetica", "bold");
-        doc.text("MESSAGE:", margin, noteY);
-        noteY += 12;
-        doc.setFont("helvetica", "normal");
-
-        const wrappedMsg = wrapTextByWords(data.message, 10);
-        wrappedMsg.forEach((line) => {
-          doc.text(line, margin, noteY);
-          noteY += 12;
-        });
-      }
-
-      const footerY = doc.internal.pageSize.getHeight() - 70;
-      doc.setFontSize(8);
-      doc.setTextColor(100);
-      doc.text(
-        "For any queries, please feel free to call Muhammad Ahsan Idrees | ahsan.idrees@iedge.co | +92 3458508254 | Terms & Conditions enclosed.",
-        margin,
-        footerY - 15,
-        { maxWidth: pageWidth - margin * 2 }
-      );
-      doc.text(
-        "C-150, Block 2, Clifton, Karachi - 75600, Pakistan | Tel: +92 213 537 1818 | Email: sales@iedge.co | URL: www.iedge.co",
-        margin,
-        footerY + 15,
-        { maxWidth: pageWidth - margin * 2 }
-      );
-    };
-
-    // ✅ LOGO HANDLING (same pattern as EstimateForm)
-    const selectedCompany = companyList.find((c) => c.name === (data.company || ""));
-    // If you stored withLogo in estimate, use it; otherwise default to true
-    const withLogo = (data as any)?.withLogo ?? true;
-    const logoSrc = withLogo && selectedCompany ? selectedCompany.logo : null;
-
-    if (logoSrc) {
-      // Important: load image before addImage
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = logoSrc;
-
-      await new Promise<void>((resolve) => {
-        img.onload = () => {
-          try {
-            const logoWidth = 120;
-            const aspectRatio = img.height / img.width;
-            const logoHeight = logoWidth * aspectRatio;
-            doc.addImage(img, "PNG", pageWidth - 180, 30, logoWidth, logoHeight);
-          } catch (e) {
-            console.warn("Logo addImage failed, continuing without logo:", e);
-          }
-          resolve();
-        };
-        img.onerror = () => resolve();
-      });
-    }
-
-    generatePDFContent();
-    return doc.output("blob");
+    return <span className={`${base} ${cls}`}>{s}</span>;
   };
+
+
 
   return (
     <div className="mt-8 px-4">
@@ -757,7 +624,7 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
         />
       </div>
 
-      <table className="w-full border">
+      <table className="w-full border text-sm">
         <thead className="bg-gray-100">
           <tr>
             <th>Estimate No</th>
@@ -768,6 +635,8 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
             <th>Edit Count</th>
             <th>Created By</th>
             <th>Actions</th>
+            <th>Status</th>
+
           </tr>
         </thead>
 
@@ -775,21 +644,20 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
           {filteredEstimates.map((e, i) => (
             <tr key={i} className="text-center border-b hover:bg-gray-50">
               <td>{e.estimateNo}</td>
+
               <td>{e.client}</td>
               <td>{e.subject}</td>
               <td>{e.date}</td>
               <td>
                 PKR{" "}
-                {Number(e.total ?? 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}
+                {Number(e.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </td>
-              <td>{e.editCount ?? 0}</td>
+              <td>{(e as any).editCount ?? 0}</td>
               <td>{usersMap[e.createdBy]?.displayName || "Unknown"}</td>
 
-              <td>
+              {/* <td>
                 <div className="flex items-center justify-center gap-2">
-                  <Button onClick={() => handleViewDetail(e)}>View Detail</Button>
+                  <Button onClick={() => handleViewDetail(e)}>Detail</Button>
 
                   <Button onClick={() => onEdit(e)}>Edit</Button>
 
@@ -805,19 +673,73 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
                   {isAdmin && (
                     <Button
                       className="bg-red-600 text-white hover:bg-red-700"
-                      onClick={() => handleDelete(e.id!)}
+                      onClick={() => handleDelete((e as any).id!)}
                     >
                       Delete
                     </Button>
                   )}
                 </div>
+              </td> */}
+
+              <td>
+                <div className="flex items-center justify-center gap-2">
+                  {/* Detail */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="View Detail"
+                    onClick={() => handleViewDetail(e)}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+
+                  {/* Edit */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Edit"
+                    onClick={() => onEdit(e)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+
+                  {/* Duplicate */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Duplicate"
+                    onClick={() => {
+                      const dup = { ...e, id: undefined, estimateNo: "" };
+                      onDuplicate(dup);
+                    }}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+
+                  {/* Delete (Admin only) */}
+                  {isAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Delete"
+                      className="text-red-600 hover:bg-red-100"
+                      onClick={() => handleDelete((e as any).id!)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              </td>
+
+              <td>
+                <StatusBadge status={e.status} />
               </td>
             </tr>
           ))}
 
           {filteredEstimates.length === 0 && (
             <tr>
-              <td colSpan={8} className="py-4 text-center">
+              <td colSpan={9} className="py-4 text-center">
                 No estimates found.
               </td>
             </tr>
@@ -878,3 +800,4 @@ export default function EstimateList({ onEdit, onDuplicate }: Props) {
     </div>
   );
 }
+
